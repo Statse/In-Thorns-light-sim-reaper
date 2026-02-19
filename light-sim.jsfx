@@ -1,0 +1,306 @@
+desc: Light Sim - Cameo PixBar 650 CPro COB x4
+// Phase 1 scaffold: MIDI input monitoring + visual fixture display
+// Stage layout (left to right): Horizontal | Vertical | Vertical | Horizontal
+// MIDI: ch15 = show page selector, ch16 = scene trigger
+
+in_pin: none
+out_pin: none
+
+@init
+
+// ── Memory layout ─────────────────────────────────────────────────────────────
+// fix_r[0..3], fix_g[0..3], fix_b[0..3] - current color per fixture (0-255)
+fix_r = 0;   // mem slots 0-3
+fix_g = 4;   // mem slots 4-7
+fix_b = 8;   // mem slots 8-11
+
+// note_colors[note * 3 + 0/1/2] = R/G/B placeholder color per scene note
+note_colors = 100; // mem slots 100-153 (18 notes x 3 channels)
+
+// ── State ─────────────────────────────────────────────────────────────────────
+active_ch15_note = -1;   // current show page
+active_ch16_note = -1;   // current scene
+active_ch16_vel  = 0;
+last_trigger_t   = 0;
+
+// ── Init fixture colors to off ────────────────────────────────────────────────
+i = 0;
+loop(4,
+  fix_r[i] = 0; fix_g[i] = 0; fix_b[i] = 0;
+  i += 1;
+);
+
+// ── Placeholder note-to-color table (ch16, notes 0-17) ───────────────────────
+// Will be replaced with real DMXIS scene data once .dps file is available
+// Format: note_colors[note*3+0] = R, [note*3+1] = G, [note*3+2] = B (0-255)
+note_colors[0]  = 255; note_colors[1]  = 255; note_colors[2]  = 255; // 0: white
+note_colors[3]  = 255; note_colors[4]  = 30;  note_colors[5]  = 10;  // 1: red
+note_colors[6]  = 20;  note_colors[7]  = 220; note_colors[8]  = 20;  // 2: green
+note_colors[9]  = 20;  note_colors[10] = 60;  note_colors[11] = 255; // 3: blue
+note_colors[12] = 255; note_colors[13] = 220; note_colors[14] = 0;   // 4: yellow
+note_colors[15] = 0;   note_colors[16] = 220; note_colors[17] = 255; // 5: cyan
+note_colors[18] = 200; note_colors[19] = 0;   note_colors[20] = 255; // 6: magenta
+note_colors[21] = 255; note_colors[22] = 100; note_colors[23] = 0;   // 7: orange
+note_colors[24] = 100; note_colors[25] = 0;   note_colors[26] = 200; // 8: deep purple
+note_colors[27] = 255; note_colors[28] = 190; note_colors[29] = 80;  // 9: warm white
+note_colors[30] = 0;   note_colors[31] = 80;  note_colors[32] = 255; // 10: cool blue
+note_colors[33] = 255; note_colors[34] = 140; note_colors[35] = 0;   // 11: amber
+note_colors[36] = 255; note_colors[37] = 50;  note_colors[38] = 120; // 12: pink
+note_colors[39] = 160; note_colors[40] = 0;   note_colors[41] = 0;   // 13: deep red
+note_colors[42] = 130; note_colors[43] = 255; note_colors[44] = 0;   // 14: lime
+note_colors[45] = 80;  note_colors[46] = 180; note_colors[47] = 255; // 15: ice blue
+note_colors[48] = 70;  note_colors[49] = 0;   note_colors[50] = 160; // 16: violet
+note_colors[51] = 255; note_colors[52] = 200; note_colors[53] = 20;  // 17: gold
+
+// ── Glow decay ────────────────────────────────────────────────────────────────
+glow_r = 0; glow_g = 0; glow_b = 0;
+
+@block
+
+while(midirecv(offset, msg1, msg2, msg3)) (
+  status = msg1 & 0xF0;
+  channel = (msg1 & 0x0F) + 1; // convert to 1-indexed MIDI channel
+  note = msg2;
+  vel  = msg3;
+
+  // ── Note On ──────────────────────────────────────────────────────────────
+  (status == 0x90 && vel > 0) ? (
+
+    channel == 15 ? (
+      // Show page change - used as song marker
+      active_ch15_note = note;
+    );
+
+    channel == 16 ? (
+      // Scene trigger - light all fixtures
+      active_ch16_note = note;
+      active_ch16_vel  = vel;
+
+      // Look up placeholder color for this note
+      note < 18 ? (
+        base = note * 3;
+        r = note_colors[base]   * (vel / 127);
+        g = note_colors[base+1] * (vel / 127);
+        b = note_colors[base+2] * (vel / 127);
+      ) : (
+        // Unknown note: white at half brightness
+        r = 200; g = 200; b = 200;
+      );
+
+      // Apply color to all 4 fixtures
+      // (Phase 3 will assign per-fixture colors from real scene data)
+      i = 0;
+      loop(4,
+        fix_r[i] = r;
+        fix_g[i] = g;
+        fix_b[i] = b;
+        i += 1;
+      );
+
+      // Update glow for flash effect
+      glow_r = r; glow_g = g; glow_b = b;
+    );
+  );
+
+  // ── Note Off ─────────────────────────────────────────────────────────────
+  // DMXIS holds the last scene state until next trigger, so we keep colors.
+  // Un-comment the block below if you want fixtures to go dark on note-off.
+  //
+  // (status == 0x80 || (status == 0x90 && vel == 0)) ? (
+  //   channel == 16 ? (
+  //     i = 0; loop(4, fix_r[i]=0; fix_g[i]=0; fix_b[i]=0; i+=1;);
+  //   );
+  // );
+
+  // Pass all MIDI through unchanged
+  midisend(offset, msg1, msg2, msg3);
+);
+
+@gfx 900 440
+
+// ── Clear to dark background ──────────────────────────────────────────────────
+gfx_r = 0.04; gfx_g = 0.04; gfx_b = 0.07; gfx_a = 1;
+gfx_rect(0, 0, gfx_w, gfx_h, 1);
+
+// ── Header bar ────────────────────────────────────────────────────────────────
+gfx_r = 0.1; gfx_g = 0.1; gfx_b = 0.15; gfx_a = 1;
+gfx_rect(0, 0, gfx_w, 48, 1);
+
+gfx_setfont(1, "Arial", 15, 'b');
+gfx_r = 0.9; gfx_g = 0.9; gfx_b = 0.9; gfx_a = 1;
+gfx_x = 12; gfx_y = 8;
+gfx_printf("LIGHT SIM  //  Cameo PixBar 650 CPro COB  x4");
+
+gfx_setfont(2, "Arial", 11, 0);
+active_ch16_note >= 0 ? (
+  gfx_r = 1.0; gfx_g = 0.85; gfx_b = 0.2; gfx_a = 1;
+  gfx_x = 12; gfx_y = 28;
+  gfx_printf("SCENE  ch%d  note %d  vel %d", 16, active_ch16_note, active_ch16_vel);
+) : (
+  gfx_r = 0.4; gfx_g = 0.4; gfx_b = 0.4; gfx_a = 1;
+  gfx_x = 12; gfx_y = 28;
+  gfx_printf("Waiting for MIDI on ch16...");
+);
+
+active_ch15_note >= 0 ? (
+  gfx_r = 0.4; gfx_g = 0.8; gfx_b = 1.0; gfx_a = 1;
+  gfx_x = gfx_w - 180; gfx_y = 28;
+  gfx_printf("SONG PAGE  ch15  note %d", active_ch15_note);
+);
+
+// ── Fixture rendering ─────────────────────────────────────────────────────────
+// Stage area starts below header
+stage_top    = 60;
+stage_bottom = gfx_h - 50;
+stage_h      = stage_bottom - stage_top;
+center_y     = stage_top + stage_h / 2;
+
+// Fixture dimensions
+H_W = 220; H_H = 56;  // horizontal bar
+V_W = 56;  V_H = 220; // vertical bar
+segments = 6;          // COB sections per fixture
+
+// Slot width to spread 4 fixtures evenly
+slot_w = (gfx_w - 40) / 4;
+
+i = 0;
+loop(4,
+  // Slot center x
+  cx = 20 + slot_w * i + slot_w / 2;
+
+  is_horiz = (i == 0 || i == 3);
+  is_horiz ? (fw = H_W; fh = H_H;) : (fw = V_W; fh = V_H;);
+
+  // Top-left corner of fixture face
+  fx = cx - fw/2;
+  fy = center_y - fh/2;
+
+  // Fixture housing shadow
+  gfx_r = 0.0; gfx_g = 0.0; gfx_b = 0.0; gfx_a = 0.5;
+  gfx_rect(fx - 2, fy - 2, fw + 8, fh + 8, 1);
+
+  // Fixture housing body
+  gfx_r = 0.18; gfx_g = 0.18; gfx_b = 0.20; gfx_a = 1;
+  gfx_rect(fx - 3, fy - 3, fw + 6, fh + 6, 1);
+
+  // Housing border
+  gfx_r = 0.45; gfx_g = 0.45; gfx_b = 0.50; gfx_a = 1;
+  gfx_rect(fx - 3, fy - 3, fw + 6, fh + 6, 0);
+
+  // Get normalized fixture color
+  r = fix_r[i] / 255;
+  g = fix_g[i] / 255;
+  b = fix_b[i] / 255;
+  intensity = (r + g + b) / 3;
+
+  // ── Draw COB segments ─────────────────────────────────────────────────────
+  j = 0;
+  loop(segments,
+    is_horiz ? (
+      seg_w = floor((fw - (segments + 1) * 4) / segments);
+      seg_h = fh - 8;
+      seg_x = fx + 4 + j * (seg_w + 4);
+      seg_y = fy + 4;
+    ) : (
+      seg_w = fw - 8;
+      seg_h = floor((fh - (segments + 1) * 4) / segments);
+      seg_x = fx + 4;
+      seg_y = fy + 4 + j * (seg_h + 4);
+    );
+
+    // Segment tray
+    intensity > 0.01 ? (
+      gfx_r = r * 0.25; gfx_g = g * 0.25; gfx_b = b * 0.25;
+    ) : (
+      gfx_r = 0.06; gfx_g = 0.06; gfx_b = 0.08;
+    );
+    gfx_a = 1;
+    gfx_rect(seg_x, seg_y, seg_w, seg_h, 1);
+
+    // COB emitter
+    circ_x = seg_x + seg_w/2;
+    circ_y = seg_y + seg_h/2;
+    circ_r = min(seg_w, seg_h) * 0.36;
+
+    intensity > 0.01 ? (
+      // Outer glow
+      gfx_r = r * 0.5; gfx_g = g * 0.5; gfx_b = b * 0.5; gfx_a = 0.35;
+      gfx_circle(circ_x, circ_y, circ_r * 2.0, 1, 1);
+
+      // Mid glow
+      gfx_r = r * 0.8; gfx_g = g * 0.8; gfx_b = b * 0.8; gfx_a = 0.6;
+      gfx_circle(circ_x, circ_y, circ_r * 1.4, 1, 1);
+
+      // Bright core
+      gfx_r = min(r + 0.3, 1); gfx_g = min(g + 0.3, 1); gfx_b = min(b + 0.3, 1); gfx_a = 1;
+      gfx_circle(circ_x, circ_y, circ_r, 1, 1);
+
+      // Hot spot (white center)
+      gfx_r = 1; gfx_g = 1; gfx_b = 1; gfx_a = 0.5;
+      gfx_circle(circ_x, circ_y, circ_r * 0.45, 1, 1);
+    ) : (
+      // Off state: dark ring
+      gfx_r = 0.12; gfx_g = 0.12; gfx_b = 0.14; gfx_a = 1;
+      gfx_circle(circ_x, circ_y, circ_r, 0, 1);
+      gfx_r = 0.08; gfx_g = 0.08; gfx_b = 0.10; gfx_a = 1;
+      gfx_circle(circ_x, circ_y, circ_r * 0.6, 1, 1);
+    );
+
+    j += 1;
+  );
+
+  // Beam spill (when lit, draw a soft cone below/to-side of fixture)
+  intensity > 0.05 ? (
+    gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = 0.06 * intensity;
+    is_horiz ? (
+      // Horizontal fixture: beam spills downward
+      beam_y1 = fy + fh + 3;
+      beam_y2 = min(stage_bottom - 2, beam_y1 + 80);
+      gfx_triangle(fx, beam_y1, fx+fw, beam_y1,
+                   fx+fw+30, beam_y2, fx-30, beam_y2);
+    ) : (
+      // Vertical fixture: beam spills to one side (stage left/right)
+      // L2 (i=1) spills left, L3 (i=2) spills right
+      i == 1 ? (
+        beam_x1 = fx - 3;
+        gfx_triangle(beam_x1, fy, beam_x1, fy+fh,
+                     beam_x1 - 80, fy - 30, beam_x1 - 80, fy+fh+30);
+      ) : (
+        beam_x1 = fx + fw + 3;
+        gfx_triangle(beam_x1, fy, beam_x1, fy+fh,
+                     beam_x1 + 80, fy - 30, beam_x1 + 80, fy+fh+30);
+      );
+    );
+  );
+
+  // Fixture label below
+  gfx_setfont(2, "Arial", 11, 0);
+  is_horiz ? (
+    gfx_r = 0.75; gfx_g = 0.75; gfx_b = 0.75;
+  ) : (
+    gfx_r = 0.5; gfx_g = 0.75; gfx_b = 1.0;
+  );
+  gfx_a = 1;
+
+  // Center the label under the fixture
+  label_x = cx - 18;
+  label_y  = max(fy + fh, center_y + H_H/2 + 2) + 8;
+  gfx_x = label_x; gfx_y = label_y;
+  is_horiz ? (
+    gfx_printf("L%d  [H]", i + 1);
+  ) : (
+    gfx_printf("L%d  [V]", i + 1);
+  );
+
+  i += 1;
+);
+
+// ── Stage floor line ──────────────────────────────────────────────────────────
+gfx_r = 0.25; gfx_g = 0.25; gfx_b = 0.30; gfx_a = 1;
+gfx_line(20, stage_bottom, gfx_w - 20, stage_bottom, 0);
+
+// ── Footer ────────────────────────────────────────────────────────────────────
+gfx_setfont(2, "Arial", 10, 0);
+gfx_r = 0.3; gfx_g = 0.3; gfx_b = 0.35; gfx_a = 1;
+gfx_x = 12; gfx_y = gfx_h - 20;
+gfx_printf("Phase 1  |  Colors: placeholder  |  ch15 = song page  |  ch16 = scene trigger  |  DMXIS .dps pending");
