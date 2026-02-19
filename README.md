@@ -88,7 +88,7 @@ Key areas to modify:
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 Free to use, fork, and modify. If you build something with it, a mention of the original author is appreciated but not required.
 
 ---
